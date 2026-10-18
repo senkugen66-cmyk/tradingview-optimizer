@@ -26,3 +26,16 @@ export function dateRangeMatches(
   const swapped = dateInputMatches(actualStart, end) && dateInputMatches(actualEnd, start);
   return inOrder || (allowSwap && swapped);
 }
+
+/**
+ * Parse a TradingView trade-list timestamp ("YYYY-MM-DD HH:MM[:SS]", chart time zone) into
+ * milliseconds. The wall-clock fields are read as UTC so spans and calendar days come out
+ * exactly as displayed, without any time-zone conversion. Returns null when unreadable.
+ */
+export function parseTradeTimestamp(value: string | null | undefined): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec((value || '').trim());
+  if (!m) return null;
+  const [, y, mo, d, h = '0', mi = '0', s = '0'] = m;
+  const ms = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s);
+  return Number.isFinite(ms) ? ms : null;
+}

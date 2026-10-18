@@ -1,3 +1,4 @@
+import { parseTradeTimestamp } from './dates';
 import type { BacktestTrade, OptimizationMetrics } from './types';
 
 export function parseCSVTrades(csvContent: string): BacktestTrade[] {
@@ -181,6 +182,27 @@ export function inferInitialCapital(trades: BacktestTrade[]): number | null {
   return Number.isFinite(capital) && capital > 0 ? capital : null;
 }
 
+const MS_PER_YEAR = 365.25 * 24 * 3600 * 1000;
+
+/**
+ * Trades per year over the span from the first entry to the last exit. Returns null when the
+ * dates can't be read or the span is shorter than one day (too short to annualise).
+ */
+export function tradesPerYear(trades: BacktestTrade[]): number | null {
+  let first = Infinity;
+  let last = -Infinity;
+  for (const trade of trades) {
+    for (const ts of [parseTradeTimestamp(trade.entryDate), parseTradeTimestamp(trade.exitDate)]) {
+      if (ts === null) continue;
+      first = Math.min(first, ts);
+      last = Math.max(last, ts);
+    }
+  }
+  const span = last - first;
+  if (!Number.isFinite(span) || span < 24 * 3600 * 1000) return null;
+  return trades.length / (span / MS_PER_YEAR);
+}
+
 export function calculateMetricsFromTrades(
   trades: BacktestTrade[],
   initialCapital: number = inferInitialCapital(trades) ?? 100000,
@@ -277,22 +299,22 @@ export function calculateMetricsFromTrades(
     visit(initialCapital + closedProfit);
   }
 
-  // Calculate Sharpe Ratio (assuming ~252 trading days/year)
+  // Sharpe and Sortino: per-trade ratios annualised by the number of trades per year,
+  // measured over the span the trades cover (first entry to last exit). A longer backtest
+  // with the same trading frequency gives the same value. When the span can't be read the
+  // ratios are left per-trade (factor 1). Sortino uses the standard downside deviation:
+  // root mean square of min(r, 0) over all trades (target 0).
   const avgReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
   const variance = returns.length > 1
     ? returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (returns.length - 1)
     : 0;
   const stdDev = Math.sqrt(variance);
-  // Annualize: multiply by sqrt(252) for daily returns, or estimate based on trade frequency
-  const annualizationFactor = Math.sqrt(Math.min(252, trades.length));
+  const annualizationFactor = Math.sqrt(tradesPerYear(trades) ?? 1);
   const sharpeRatio = stdDev > 0 ? (avgReturn / stdDev) * annualizationFactor : 0;
 
-  // Calculate Sortino Ratio (only downside deviation)
-  const negativeReturns = returns.filter(r => r < 0);
-  const downsideVariance = negativeReturns.length > 1
-    ? negativeReturns.reduce((sum, r) => sum + Math.pow(r, 2), 0) / (negativeReturns.length - 1)
+  const downsideDeviation = returns.length > 0
+    ? Math.sqrt(returns.reduce((sum, r) => sum + Math.min(r, 0) ** 2, 0) / returns.length)
     : 0;
-  const downsideDeviation = Math.sqrt(downsideVariance);
   const sortinoRatio = downsideDeviation > 0 ? (avgReturn / downsideDeviation) * annualizationFactor : 0;
 
   // Helper to sanitize numbers (convert NaN/Infinity to 0)

@@ -25,31 +25,14 @@ function tradesFrom(pnls: number[], mae: number[] = []): BacktestTrade[] {
   });
 }
 
-describe('A1 Sharpe/Sortino are per-trade and scale with trade count', () => {
-  test('identical return distribution, 4x the trades -> Sharpe doubles', () => {
-    const base = [1500, -1000, 1200, -800, 900];                    // per-trade P&L pattern
-    const s10 = calculateMetricsFromTrades(tradesFrom(Array(2).fill(base).flat()), CAPITAL).sharpeRatio;
-    const s40 = calculateMetricsFromTrades(tradesFrom(Array(8).fill(base).flat()), CAPITAL).sharpeRatio;
-    // mean/std are (almost) the same; only sqrt(min(252, N)) changes: sqrt(40/10) = 2
-    expect(s40 / s10).toBeGreaterThan(1.9);
-    expect(s40 / s10).toBeLessThan(2.2);
-  });
-});
+// A1 (Sharpe/Sortino scaled with sqrt(min(252, N))) was fixed in the H1 commit; regression tests
+// live in tests/ratios.test.ts.
 
 // A2 (drawdown ignored open-trade losses) and A3 (% taken at the largest dollar drawdown) were
 // fixed in the H2 commit; regression tests live in tests/trades.test.ts.
 
-describe('A4 Sortino downside deviation uses only losing trades, divided by (losers - 1)', () => {
-  test('differs from the standard target-downside deviation over all N trades', () => {
-    const pnls = [3000, -1000, 2000, -1000, 1000, 500];
-    const m = calculateMetricsFromTrades(tradesFrom(pnls), CAPITAL);
-    const r = pnls.map((p) => (p / CAPITAL) * 100);
-    const mean = r.reduce((a, b) => a + b, 0) / r.length;
-    const ddStd = Math.sqrt(r.reduce((s, x) => s + Math.min(x, 0) ** 2, 0) / r.length);
-    const standard = (mean / ddStd) * Math.sqrt(r.length);
-    expect(Math.abs(m.sortinoRatio - standard) / standard).toBeGreaterThan(0.5);  // > 50% apart
-  });
-});
+// A4 (non-standard Sortino downside deviation, L1) was fixed in the H1 commit; regression test
+// in tests/ratios.test.ts.
 
 // A5 still describes trades.ts. Since the C2 fix, such runs are flagged invalidReason and are never
 // eligible as best (regression tests in tests/selection.test.ts).
