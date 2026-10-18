@@ -39,6 +39,7 @@ import type {
 } from './types';
 import { parseCSVTrades, calculateMetricsFromTrades } from './trades';
 import { isBetterRun, isEligible, selectBestByInSample } from './selection';
+import { dateRangeMatches } from './dates';
 import selectors from './selectors.json';
 import { injectOptimizerButton, updateProgress, addRun, setResult } from './optimizer-ui';
 
@@ -1818,11 +1819,11 @@ async function setBacktestDateRange(startDate: string, endDate: string): Promise
       const actualStart = startInput.value;
       const actualEnd = endInput.value;
 
-      // Accept if values match in either order (TV might display them differently)
-      const valuesCorrect = (actualStart === startDate && actualEnd === endDate);
-      const valuesSwapped = (actualStart === endDate && actualEnd === startDate);
+      // Accept if values match in either order and in any of TradingView's display formats
+      const valuesSwapped = !dateRangeMatches(actualStart, actualEnd, startDate, endDate, false) &&
+        dateRangeMatches(actualStart, actualEnd, startDate, endDate);
 
-      if (!valuesCorrect && !valuesSwapped) {
+      if (!dateRangeMatches(actualStart, actualEnd, startDate, endDate)) {
         console.error('[RQ Extension] Date values not set correctly! Expected:', startDate, endDate, 'Got:', actualStart, actualEnd);
         // Try again
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -2368,7 +2369,8 @@ async function handleStartOptimization(
 
           const isDateSet = await setBacktestDateRange(window.isStart, window.isEnd);
           if (!isDateSet) {
-            console.error(`[RQ Extension] Failed to set IS date range for window ${currentWindowNumber}`);
+            throw new Error(`Could not set the In-Sample date range for window ${currentWindowNumber} ` +
+              `(${window.isStart} to ${window.isEnd}). Aborting instead of testing the wrong period.`);
           }
 
           const reopenedDialog = await openSettingsDialogForOptimization(strategyName);
@@ -2452,7 +2454,8 @@ async function handleStartOptimization(
 
             const oosDateSet = await setBacktestDateRange(window.oosStart, window.oosEnd);
             if (!oosDateSet) {
-              console.error(`[RQ Extension] Failed to set OOS date range for window ${currentWindowNumber}`);
+              throw new Error(`Could not set the Out-of-Sample date range for window ${currentWindowNumber} ` +
+                `(${window.oosStart} to ${window.oosEnd}). Aborting instead of testing the wrong period.`);
             }
 
             // Run ALL combinations on OOS for this window
@@ -2557,8 +2560,8 @@ async function handleStartOptimization(
         // Set date range to In-Sample period
         const isDateSet = await setBacktestDateRange(wfConfig.inSampleStart!, wfConfig.inSampleEnd!);
         if (!isDateSet) {
-          console.error('[RQ Extension] Failed to set In-Sample date range');
-          // Continue anyway - user may have already set the dates
+          throw new Error(`Could not set the In-Sample date range (${wfConfig.inSampleStart} to ` +
+            `${wfConfig.inSampleEnd}). Aborting instead of testing the wrong period.`);
         }
 
         // Reopen settings dialog for parameter optimization
@@ -2663,7 +2666,8 @@ async function handleStartOptimization(
         // Set date range to Out-of-Sample period
         const oosDateSet = await setBacktestDateRange(wfConfig.outOfSampleStart!, wfConfig.outOfSampleEnd!);
         if (!oosDateSet) {
-          console.error('[RQ Extension] Failed to set Out-of-Sample date range');
+          throw new Error(`Could not set the Out-of-Sample date range (${wfConfig.outOfSampleStart} to ` +
+            `${wfConfig.outOfSampleEnd}). Aborting instead of testing the wrong period.`);
         }
 
         // Run ALL combinations on OOS period

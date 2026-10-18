@@ -30,6 +30,7 @@ import type {
   ContentToBackgroundMessage,
 } from './types';
 import { EXTENSION_VERSION } from './types';
+import { dateRangeMatches } from './dates';
 
 // ============================================================================
 // State Management
@@ -439,9 +440,29 @@ async function setDateRangeViaDebugger(tabId: number, startDate: string, endDate
       await setDateInput(1, endDate, 'END');
     }
 
-    // Step 4: Verify and click Apply button
+    // Step 4: Verify the inputs hold the requested dates, then click Apply
     console.log('[RQ Extension] Step 4: Verifying values and clicking Apply...');
     await new Promise(resolve => setTimeout(resolve, 300));
+
+    const readBackResult = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: `
+        (function() {
+          const inputs = document.querySelectorAll('input[inputmode="numeric"][data-qa-id="ui-lib-Input-input"]');
+          return { actualStart: inputs[0]?.value || '', actualEnd: inputs[1]?.value || '' };
+        })()
+      `,
+      returnByValue: true,
+    }) as { result?: { value?: { actualStart: string; actualEnd: string } } };
+    const readBack = readBackResult?.result?.value;
+    if (!readBack || !dateRangeMatches(readBack.actualStart, readBack.actualEnd, startDate, endDate)) {
+      console.error('[RQ Extension] Date inputs do not hold the requested range:',
+        { requested: [startDate, endDate], actual: readBack });
+      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', {
+        type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27,
+      });
+      await chrome.debugger.detach({ tabId });
+      return false;
+    }
 
     const verifyAndApplyResult = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
       expression: `
