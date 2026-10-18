@@ -106,25 +106,5 @@ describe('A8 Numeric grid can silently drop the max value (float accumulation)',
   });
 });
 
-describe('A9 Single walk-forward picks the "best" run using the OOS period', () => {
-  test('zero-edge parameter sets: the selected run shows a positive "out-of-sample" result', () => {
-    // Selection rule copied from content.ts:2714-2729: argmax(0.4 * IS + 0.6 * OOS) over ALL runs.
-    // IS and OOS results are independent noise with mean 0 (no parameter has any edge).
-    let seed = 42;
-    const rand = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
-    const gauss = () => Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand());
-    let sumPickedOOS = 0;
-    const trials = 2000;
-    for (let t = 0; t < trials; t++) {
-      let best = -Infinity, bestOOS = 0;
-      for (let k = 0; k < 50; k++) {                 // 50 parameter combinations
-        const is = gauss(), oos = gauss();
-        const score = 0.4 * is + 0.6 * oos;
-        if (score > best) { best = score; bestOOS = oos; }
-      }
-      sumPickedOOS += bestOOS;
-    }
-    // Honest OOS of a zero-edge strategy averages 0; the selected run averages ~ +1.8 sd.
-    expect(sumPickedOOS / trials).toBeGreaterThan(1.5);
-  });
-});
+// A9 (single walk-forward selected the best run with 0.4*IS + 0.6*OOS) was fixed in the
+// C1 commit; the regression test now lives in tests/selection.test.ts.

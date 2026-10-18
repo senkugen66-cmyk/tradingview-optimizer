@@ -25,6 +25,7 @@ import type {
 } from './types';
 
 import { roboquantLink } from './config';
+import { isBetterRun } from './selection';
 
 // Import Plotly for 3D heatmap - using the minified distribution
 import Plotly from 'plotly.js-dist-min';
@@ -3933,18 +3934,6 @@ export function sortResults(column: string): void {
   });
 
   updateUI();
-}
-
-function isBetterRun(a: OptimizationRun, b: OptimizationRun, goal: OptimizationGoal): boolean {
-  const aVal = a.metrics[goal as keyof typeof a.metrics] as number;
-  const bVal = b.metrics[goal as keyof typeof b.metrics] as number;
-
-  // For drawdown, lower is better
-  if (goal === 'maxDrawdownPercent') {
-    return Math.abs(aVal) < Math.abs(bVal);
-  }
-
-  return aVal > bVal;
 }
 
 // ============================================================================

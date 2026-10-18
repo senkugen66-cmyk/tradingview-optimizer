@@ -38,6 +38,7 @@ import type {
   ChangeTimeframeResponse,
 } from './types';
 import { parseCSVTrades, calculateMetricsFromTrades } from './trades';
+import { isBetterRun, selectBestByInSample } from './selection';
 import selectors from './selectors.json';
 import { injectOptimizerButton, updateProgress, addRun, setResult } from './optimizer-ui';
 
@@ -2699,40 +2700,12 @@ async function handleStartOptimization(
           markRunComplete();
         }
 
-        // Find the best run considering BOTH IS and OOS performance
-        // Use a combined score: avg of IS metric and OOS metric (weighted towards OOS for robustness)
-        let bestCombinedRun: OptimizationRun | null = null;
-        let bestCombinedScore = -Infinity;
-
-        for (const run of runs) {
-          if (!run.outOfSampleMetrics) continue;
-
-          const isMetrics = run.inSampleMetrics || run.metrics;
-          const oosMetrics = run.outOfSampleMetrics;
-
-          // Get the optimization goal metric from both periods
-          let isValue = isMetrics[config.optimizationGoal as keyof OptimizationMetrics] as number;
-          let oosValue = oosMetrics[config.optimizationGoal as keyof OptimizationMetrics] as number;
-
-          // For drawdown, invert (less negative is better)
-          if (config.optimizationGoal === 'maxDrawdownPercent') {
-            isValue = -Math.abs(isValue);
-            oosValue = -Math.abs(oosValue);
-          }
-
-          // Combined score: 40% IS + 60% OOS (favor OOS for robustness)
-          const combinedScore = isValue * 0.4 + oosValue * 0.6;
-
-          if (combinedScore > bestCombinedScore) {
-            bestCombinedScore = combinedScore;
-            bestCombinedRun = run;
-          }
-        }
-
-        // Update bestRun to the one with best combined IS+OOS performance
-        if (bestCombinedRun) {
-          bestRun = bestCombinedRun;
-          console.log('[RQ Extension] Best combined IS+OOS run:', bestRun.runNumber, bestRun.parameters);
+        // Select on In-Sample metrics only and report that run's OOS result.
+        // (Selecting with OOS data would make the OOS figures in-sample.)
+        const isBest = selectBestByInSample(runs, config.optimizationGoal);
+        if (isBest) {
+          bestRun = isBest;
+          console.log('[RQ Extension] Best In-Sample run:', bestRun.runNumber, bestRun.parameters);
         }
 
         // Calculate final overfitting score for the best run
@@ -3174,25 +3147,6 @@ async function closeSettingsDialog(): Promise<void> {
     console.log('[RQ Extension] Closed settings dialog after optimization');
     await sleep(200);
   }
-}
-
-/**
- * Compare two runs based on optimization goal
- */
-function isBetterRun(
-  a: OptimizationRun,
-  b: OptimizationRun,
-  goal: OptimizationConfig['optimizationGoal']
-): boolean {
-  const aVal = a.metrics[goal as keyof OptimizationMetrics] as number;
-  const bVal = b.metrics[goal as keyof OptimizationMetrics] as number;
-
-  // For drawdown, lower (less negative) is better
-  if (goal === 'maxDrawdownPercent') {
-    return Math.abs(aVal) < Math.abs(bVal);
-  }
-
-  return aVal > bVal;
 }
 
 // ============================================================================
