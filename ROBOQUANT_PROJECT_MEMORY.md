@@ -301,6 +301,14 @@ Browser probe (2026-10-18, headless Chromium with the built `dist/`, no TradingV
   "Optimizer" button into the bottom-panel tab bar
 - **blocked:** adding any strategy, built-in included, shows "You'll need a free account to access".
   No account was created and no credentials were used, so no optimization run could be exercised.
+- **Offline end-to-end check (E008):**
+  - the ORB playbook trades from the user's trade-backtest repo were written as TradingView-format
+    CSVs and run through `parseCSVTrades`, `calculateMetricsFromTrades` and `evaluatePropFirm`
+  - all checks match the independent Python reference: trades, net, win rate and PF exact;
+    drawdown within $1; Lucid attempt outcomes, end dates and profits exact
+  - the same result, injected into the extension's chrome.storage history, renders correctly in the
+    real TradingView page; Prop Firm preset switching works
+  - evidence: `roboquant/verification/` in the trade-backtest repo
 - the content script's global error handler logs TradingView's own benign
   "ResizeObserver loop completed" errors as `UNCAUGHT ERROR`. That's noise, not an extension fault.
 
@@ -357,7 +365,8 @@ New modules:
 ## 14. Roadmap (do in order; one isolated change per experiment, each with a regression test)
 Items 1–6 (C1, C2, C3, H2, H1, H3) are done on `audit-fixes`.
 
-0. **Verify the fixes in a live browser (needs the user's logged-in TradingView; see §12 probe):**
+0. **Verify the live DOM automation (needs a logged-in TradingView; the user can't do it now).**
+   Metrics, prop-firm engine and UI rendering are verified (§12, E008); what remains:
    - run the `research/BASELINES.md` procedure
    - in the Prop Firm section, switch presets and check the numbers against a hand count on the
      exported trade CSV

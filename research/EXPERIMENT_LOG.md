@@ -103,3 +103,32 @@ Offline verification after these commits:
 **Next:**
 - the user runs the `BASELINES.md` procedure in their logged-in browser (step 0)
 - then H4 (positive completion check)
+
+---
+
+## 2026-10-18 · E008 · End-to-end check on real trades without a TradingView account
+
+**Objective:** the user can't run the browser procedure, so verify as much as possible without a
+logged-in session.
+
+**Method**
+- Real trades: the ORB playbook, 223 + 625 trades after costs, from the user's trade-backtest repo.
+- Written as TradingView "List of trades" CSVs.
+- Run through the extension's parser, metrics and `evaluatePropFirm`.
+- Compared with a Python reference computed from the same trades, including the independently
+  tested `lucid_eval`.
+- The resulting run was injected into the extension's `chrome.storage` history and opened in the
+  real TradingView page in headless Chromium.
+
+**Results**
+- All checks pass: trades, net, win rate and PF exact; max drawdown within $1 and 0.01 pt.
+- LucidPro 25K and LucidFlex 25K: attempt outcomes, end dates and profits exact in both periods.
+- One definition difference was found and documented: `lucid_eval` reports a breach attempt's
+  profit before the breach session, the extension at the breach point. It is not a bug.
+- The UI shows the same numbers, and preset switching works. The extension logged no errors.
+
+**Not verified:** the live parameter sweep, the C2 and C3 browser paths, and H4. They need an
+account.
+
+**Decision:** treat the metric layer and the prop-firm check as verified. Treat the DOM automation
+as unverified.
