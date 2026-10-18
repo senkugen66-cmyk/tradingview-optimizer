@@ -26,6 +26,8 @@ import type {
 
 import { roboquantLink } from './config';
 import { isBetterRun, isEligible } from './selection';
+import { evaluatePropFirm, genericPercentRules, LUCID_PRESETS, propFirmVerdict, resolveRules } from './propfirm';
+import { inferInitialCapital } from './trades';
 
 // Import Plotly for 3D heatmap - using the minified distribution
 import Plotly from 'plotly.js-dist-min';
@@ -139,14 +141,6 @@ function getRollingDefaults(): { totalStart: string; totalEnd: string } {
 
 const rollingDefaults = getRollingDefaults();
 
-const PROP_FIRM_DEFAULTS = {
-  accountSize: 100000,
-  profitTargetPct: 8,
-  maxDailyLossPct: 5,
-  maxTotalLossPct: 10,
-  timeLimitDays: 30,
-};
-
 const state: OptimizerUIState & {
   heatmapExpanded: boolean;
   heatmapMode: '2d' | '3d';
@@ -154,6 +148,7 @@ const state: OptimizerUIState & {
   heatmapYParam: string;
   heatmapMetric: keyof OptimizationMetrics;
   propFirmExpanded: boolean;
+  propFirmPreset: string;
 } = {
   isOpen: false,
   inputs: [],
@@ -192,6 +187,7 @@ const state: OptimizerUIState & {
   heatmapMetric: 'sharpeRatio',
   // Prop Firm
   propFirmExpanded: false,
+  propFirmPreset: 'lucid-flex-25k',
   // History defaults
   showHistory: false,
   historyEntries: [],
@@ -2342,6 +2338,13 @@ function attachEventListeners(): void {
     updateUI();
   });
 
+  // Prop Firm rule preset
+  const propFirmPresetSelect = overlay.querySelector('[data-action="propfirm-preset"]') as HTMLSelectElement | null;
+  propFirmPresetSelect?.addEventListener('change', () => {
+    state.propFirmPreset = propFirmPresetSelect.value;
+    updateUI();
+  });
+
   // Prop Firm CTA
   const propFirmCta = overlay.querySelector('[data-action="propfirm-cta"]');
   propFirmCta?.addEventListener('click', () => {
@@ -4035,61 +4038,80 @@ function validateWalkForwardDates(): string | null {
 function renderPropFirmSection(result: OptimizationResult): string {
   if (!result.bestRun) return '';
 
-  const metrics = result.bestRun.metrics;
-  const capital = metrics.netProfitPercent !== 0
-    ? Math.abs(metrics.netProfit / (metrics.netProfitPercent / 100))
-    : PROP_FIRM_DEFAULTS.accountSize;
+  // Prefer the out-of-sample trades when walk-forward produced readable ones.
+  const best = result.bestRun;
+  const oosTrades = !best.outOfSampleInvalidReason && best.outOfSampleTrades?.length ? best.outOfSampleTrades : null;
+  const trades = oosTrades ?? best.trades ?? best.inSampleTrades ?? [];
+  const tradeSource = oosTrades ? 'out-of-sample trades' : best.outOfSampleMetrics ? 'in-sample trades' : 'backtest trades';
+  const capital = inferInitialCapital(trades) ?? 100000;
+  const rules = resolveRules(state.propFirmPreset, capital);
+  const evaluation = evaluatePropFirm(trades, rules, { symbol: best.symbol || result.symbol });
 
-  const { profitTargetPct, maxDailyLossPct, maxTotalLossPct } = PROP_FIRM_DEFAULTS;
-  const dailyLossLimit = capital * (maxDailyLossPct / 100);
-
-  // Check functions
   type CheckStatus = 'pass' | 'warn' | 'fail';
   interface CheckResult { status: CheckStatus; label: string; detail: string; }
+  const usd = (n: number) => `${n < 0 ? '-' : ''}$${Math.round(Math.abs(n)).toLocaleString('en-US')}`;
+  const e = evaluation;
+  const checks: CheckResult[] = [];
 
-  const ddPct = Math.abs(metrics.maxDrawdownPercent);
-  const ddCheck: CheckResult = {
-    label: 'Max Drawdown',
-    detail: `${ddPct.toFixed(1)}% of ${maxTotalLossPct}% limit`,
-    status: ddPct > maxTotalLossPct ? 'fail' : ddPct >= maxTotalLossPct * 0.8 ? 'warn' : 'pass',
-  };
-
-  const largestLossAbs = Math.abs(metrics.largestLoss);
-  const largestLossPct = (largestLossAbs / capital) * 100;
-  const llCheck: CheckResult = {
-    label: 'Largest Loss',
-    detail: `$${(largestLossAbs / 1000).toFixed(1)}K of $${(dailyLossLimit / 1000).toFixed(0)}K daily limit`,
-    status: largestLossPct > maxDailyLossPct ? 'fail' : largestLossPct >= maxDailyLossPct * 0.8 ? 'warn' : 'pass',
-  };
-
-  const profitCheck: CheckResult = {
-    label: 'Profit Target',
-    detail: `${metrics.netProfitPercent.toFixed(1)}% vs ${profitTargetPct}% required`,
-    status: metrics.netProfitPercent >= profitTargetPct ? 'pass' : metrics.netProfitPercent >= profitTargetPct * 0.5 ? 'warn' : 'fail',
-  };
-
-  const tradeCheck: CheckResult = {
-    label: 'Trade Count',
-    detail: `${metrics.totalTrades} trades (min 30)`,
-    status: metrics.totalTrades >= 30 ? 'pass' : metrics.totalTrades >= 15 ? 'warn' : 'fail',
-  };
-
-  const checks = [ddCheck, llCheck, profitCheck, tradeCheck];
-  const passCount = checks.filter(c => c.status === 'pass').length;
-  const hasAnyFail = checks.some(c => c.status === 'fail');
-
-  let verdict: string;
-  let verdictColor: string;
-  if (!hasAnyFail && passCount === checks.length) {
-    verdict = 'COMPATIBLE';
-    verdictColor = '#10b981';
-  } else if (!hasAnyFail) {
-    verdict = 'MARGINAL';
-    verdictColor = '#f59e0b';
-  } else {
-    verdict = 'AT RISK';
-    verdictColor = '#ef4444';
+  checks.push({
+    label: 'Evaluation attempts',
+    detail: `${e.passes} passed · ${e.breaches} breached · ${e.unresolved} open (${e.sessions} sessions)`,
+    status: e.passes > 0 && e.breaches === 0 ? 'pass' : e.passes > e.breaches ? 'warn' : 'fail',
+  });
+  const first = e.attempts[0];
+  if (first) {
+    checks.push({
+      label: 'First attempt',
+      detail: first.outcome === 'pass' ? `passed in ${first.sessions} sessions`
+        : first.outcome === 'breach' ? `breached (${first.breachReason}) on session ${first.sessions}`
+        : `target not reached in ${first.sessions} sessions`,
+      status: first.outcome === 'pass' ? 'pass' : first.outcome === 'breach' ? 'fail' : 'warn',
+    });
   }
+  if (e.medianSessionsToPass !== null) {
+    checks.push({ label: 'Median time to pass', detail: `${e.medianSessionsToPass} sessions`, status: 'pass' });
+  }
+  checks.push({
+    label: 'Worst session',
+    detail: `${usd(e.worstSession)} vs ${usd(rules.maxLoss)} max loss`,
+    status: -e.worstSession >= rules.maxLoss ? 'fail' : -e.worstSession >= rules.maxLoss * 0.5 ? 'warn' : 'pass',
+  });
+  if (rules.dailyLossLimit !== null) {
+    checks.push({
+      label: `Daily loss limit ${usd(rules.dailyLossLimit)}`,
+      detail: rules.dailyLossBreach === 'soft'
+        ? `hit on ${e.dailyLimitSessions} sessions (trading stopped, ${e.skippedTrades} trades skipped)`
+        : `hit on ${e.dailyLimitSessions} sessions (account fails)`,
+      status: e.dailyLimitSessions === 0 ? 'pass' : rules.dailyLossBreach === 'hard' ? 'fail' : 'warn',
+    });
+  }
+  if (rules.consistency !== null) {
+    checks.push({
+      label: `Consistency ${Math.round(rules.consistency * 100)}%`,
+      detail: `pass held back on ${e.consistencyHeldSessions} sessions`,
+      status: e.consistencyHeldSessions === 0 ? 'pass' : 'warn',
+    });
+  }
+  if (rules.maxContracts) {
+    const limit = e.contractKind === 'micro' ? `${rules.maxContracts.micros} micros`
+      : e.contractKind === 'mini' ? `${rules.maxContracts.minis} minis` : 'unknown contract';
+    checks.push({
+      label: 'Position size',
+      detail: `max ${e.maxContractsTraded} contracts vs ${limit}`,
+      status: e.sizeWithinLimit === null ? 'warn' : e.sizeWithinLimit ? 'pass' : 'fail',
+    });
+  }
+  if (e.undatedTrades > 0) {
+    checks.push({ label: 'Unreadable dates', detail: `${e.undatedTrades} trades left out`, status: 'warn' });
+  }
+
+  const passCount = checks.filter(c => c.status === 'pass').length;
+  const verdict = propFirmVerdict(e);
+  const verdictColor = verdict === 'COMPATIBLE' ? '#10b981' : verdict === 'MARGINAL' ? '#f59e0b' : '#ef4444';
+  const drawdownLabel = rules.drawdown === 'static' ? 'static'
+    : `${rules.drawdown === 'eod-trailing' ? 'end-of-day' : 'intraday'} trailing${rules.lockedFloor !== null ? `, locks at ${usd(rules.lockedFloor)}` : ''}`;
+  const presetOptions = [...LUCID_PRESETS, genericPercentRules(capital)]
+    .map(p => `<option value="${p.id}" ${p.id === rules.id ? 'selected' : ''}>${p.label}</option>`).join('');
 
   const statusDots: Record<CheckStatus, string> = {
     pass: '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#10b981;"></span>',
@@ -4100,8 +4122,6 @@ function renderPropFirmSection(result: OptimizationResult): string {
   const statusLabels: Record<CheckStatus, string> = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' };
 
   const chevronSvg = `<svg class="rq-optimizer-heatmap-chevron ${state.propFirmExpanded ? 'expanded' : ''}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>`;
-
-  const accountLabel = capital >= 1000 ? `$${Math.round(capital / 1000)}K` : `$${Math.round(capital)}`;
 
   return `
     <div class="rq-optimizer-heatmap-section" style="margin-top: 12px;">
@@ -4114,8 +4134,14 @@ function renderPropFirmSection(result: OptimizationResult): string {
       </div>
       ${state.propFirmExpanded ? `
         <div style="padding: 12px 16px;">
+          <div class="rq-optimizer-heatmap-control" style="margin-bottom: 8px;">
+            <label>Rules:</label>
+            <select data-action="propfirm-preset">${presetOptions}</select>
+          </div>
           <div style="color: #6b7280; font-size: 11px; margin-bottom: 12px;">
-            ${accountLabel} account · ${profitTargetPct}% target · ${maxDailyLossPct}% daily · ${maxTotalLossPct}% max DD
+            ${usd(rules.accountSize)} account · target ${usd(rules.profitTarget)} · max loss ${usd(rules.maxLoss)} (${drawdownLabel})
+            · daily limit ${rules.dailyLossLimit !== null ? usd(rules.dailyLossLimit) : 'none'}
+            · consistency ${rules.consistency !== null ? `${Math.round(rules.consistency * 100)}%` : 'none'}
           </div>
 
           ${checks.map(c => `
@@ -4131,6 +4157,11 @@ function renderPropFirmSection(result: OptimizationResult): string {
             <span style="font-size: 12px; font-weight: 700; color: ${verdictColor};">
               ${verdict} — ${passCount} of ${checks.length} checks passed
             </span>
+          </div>
+          <div style="color: #6b7280; font-size: 10px; margin-top: 8px; line-height: 1.4;">
+            Replays the ${tradeSource} (${trades.length}) through sequential evaluation attempts, using the
+            strategy's own position size and commission: set them to match the account. Historical
+            replay, not a forecast. ${rules.source}
           </div>
 
           <button data-action="propfirm-cta" class="rq-optimizer-btn-send" style="
