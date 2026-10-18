@@ -252,23 +252,29 @@ export function calculateMetricsFromTrades(
   const netProfitPercent = initialCapital > 0 ? (finalEquity / initialCapital) * 100 : 0;
   const avgTradePercent = totalTrades > 0 ? netProfitPercent / totalTrades : 0;
 
-  // Calculate max drawdown from equity curve
+  // Max drawdown on an equity path that includes each trade's worst open loss
+  // (TradingView's adverse excursion), not only closing equity. Dollar and percent
+  // maxima are tracked separately: the largest % drawdown can occur at a different
+  // point than the largest dollar drawdown. Run-ups inside a trade before its
+  // adverse excursion are not visible in the export, so this is still a lower bound.
   let peak = initialCapital;
   let maxDrawdown = 0;
   let maxDrawdownPercent = 0;
-  let equity = initialCapital;
+  let closedProfit = 0;
 
-  for (const trade of trades) {
-    equity = initialCapital + (trade.cumulativeProfit ?? 0);
+  const visit = (equity: number) => {
     if (equity > peak) {
       peak = equity;
     }
     const dd = peak - equity;
-    const ddPercent = peak > 0 ? (dd / peak) * 100 : 0;
-    if (dd > maxDrawdown) {
-      maxDrawdown = dd;
-      maxDrawdownPercent = ddPercent;
-    }
+    maxDrawdown = Math.max(maxDrawdown, dd);
+    maxDrawdownPercent = Math.max(maxDrawdownPercent, peak > 0 ? (dd / peak) * 100 : 0);
+  };
+
+  for (const trade of trades) {
+    visit(initialCapital + closedProfit - Math.abs(trade.drawdown ?? 0));
+    closedProfit = trade.cumulativeProfit ?? closedProfit;
+    visit(initialCapital + closedProfit);
   }
 
   // Calculate Sharpe Ratio (assuming ~252 trading days/year)

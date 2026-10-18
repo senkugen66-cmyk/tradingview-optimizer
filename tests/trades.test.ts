@@ -42,12 +42,43 @@ describe('calculateMetricsFromTrades', () => {
     expect(inferInitialCapital(trades)).toBe(1_000_000);
     const metrics = calculateMetricsFromTrades(trades);
     expect(metrics.netProfitPercent).toBeCloseTo(0.3, 5);
-    expect(metrics.maxDrawdownPercent).toBeCloseTo(0.09, 5);
+    // Trade 2 opens at cumulative -900 and has a $40 adverse excursion: the equity low is
+    // 1,000,000 - 940, so the max drawdown is 0.094% (closing equity alone gave 0.09%).
+    expect(metrics.maxDrawdownPercent).toBeCloseTo(0.094, 5);
   });
 
   test('keeps the default capital when no cumulative % column exists', () => {
     const trades = parseCSVTrades(CSV).map((t) => ({ ...t, cumulativeProfitPercent: 0 }));
     expect(inferInitialCapital(trades)).toBeNull();
     expect(calculateMetricsFromTrades(trades).netProfitPercent).toBeCloseTo(3, 5);
+  });
+});
+
+describe('max drawdown (regression for audit H2)', () => {
+  const CAPITAL = 100_000;
+  function tradesFrom(pnls: number[], mae: number[] = []) {
+    let cum = 0;
+    return pnls.map((pl, i) => {
+      cum += pl;
+      return {
+        tradeNumber: i + 1, type: 'Long' as const, signal: 'E', entryDate: '', entryPrice: 100,
+        exitDate: '', exitPrice: 100, contracts: 1, profitLoss: pl,
+        profitLossPercent: (pl / CAPITAL) * 100, cumulativeProfit: cum,
+        cumulativeProfitPercent: (cum / CAPITAL) * 100, runUp: 0, drawdown: mae[i] ?? 0,
+      };
+    });
+  }
+
+  test('includes the open loss of a trade that closed in profit', () => {
+    const m = calculateMetricsFromTrades(tradesFrom([1000], [40_000]), CAPITAL);
+    expect(m.maxDrawdown).toBe(40_000);
+    expect(m.maxDrawdownPercent).toBeCloseTo(40, 5);
+  });
+
+  test('reports the largest % drawdown, not the % at the largest dollar drawdown', () => {
+    // 100k -> 80k (-20%), then 300k -> 250k (-$50k = -16.7%)
+    const m = calculateMetricsFromTrades(tradesFrom([-20_000, 220_000, -50_000]), CAPITAL);
+    expect(m.maxDrawdown).toBe(50_000);
+    expect(m.maxDrawdownPercent).toBeCloseTo(20, 5);
   });
 });

@@ -36,21 +36,8 @@ describe('A1 Sharpe/Sortino are per-trade and scale with trade count', () => {
   });
 });
 
-describe('A2 Max drawdown ignores open-trade (intra-trade) losses', () => {
-  test('a trade that was down $40k but closed +$1k shows 0% drawdown', () => {
-    const m = calculateMetricsFromTrades(tradesFrom([1000], [40_000]), CAPITAL);
-    expect(m.maxDrawdownPercent).toBe(0);
-  });
-});
-
-describe('A3 maxDrawdownPercent is the % at the largest DOLLAR drawdown, not the largest % drawdown', () => {
-  test('early -20% vs later larger-dollar but smaller-% dip', () => {
-    // equity 100k -> 80k (-20%), then up to 300k, then down to 250k (-50k = -16.7%)
-    const m = calculateMetricsFromTrades(tradesFrom([-20_000, 220_000, -50_000]), CAPITAL);
-    expect(m.maxDrawdown).toBe(50_000);
-    expect(m.maxDrawdownPercent).toBeCloseTo(16.67, 1);   // true max % drawdown is 20%
-  });
-});
+// A2 (drawdown ignored open-trade losses) and A3 (% taken at the largest dollar drawdown) were
+// fixed in the H2 commit; regression tests live in tests/trades.test.ts.
 
 describe('A4 Sortino downside deviation uses only losing trades, divided by (losers - 1)', () => {
   test('differs from the standard target-downside deviation over all N trades', () => {
