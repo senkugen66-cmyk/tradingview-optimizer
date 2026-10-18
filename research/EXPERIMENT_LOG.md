@@ -40,3 +40,35 @@ as **untrusted** until C1–C3 are fixed. Do not optimize yet.
 **Next step:** fix C1 as an isolated change with a regression test (extract the selection logic
 into a pure module); then C2, then C3. In parallel, the user runs the browser baseline procedure
 in `BASELINES.md`.
+
+---
+
+## 2026-10-18 · E001–E004 · Fixes for C1, C2, C3, H2 (branch `audit-fixes`)
+Each fix is one commit with regression tests. Verification is offline only:
+
+| | |
+|---|---|
+| typecheck | pass |
+| `bun run test` | 22/22 |
+| `bun test research/audit` | 6/6 |
+| build | pass |
+
+| ID | Commit | Change | Evidence |
+|---|---|---|---|
+| E001 | `2e815ec` | **C1:** select the single walk-forward best on IS only. Selection logic moves to `src/selection.ts`, shared by content and UI. | Zero-edge simulation: the selected run's OOS mean is ≈ 0, down from ≈ +1.8σ (`tests/selection.test.ts`). |
+| E002 | `e7902d8` | **C2:** failed trade reads are flagged (`invalidReason`, `outOfSampleInvalidReason`). Invalid and zero-trade runs are never best. The run aborts if the first 3 reads fail. A single walk-forward whose selected run has unreadable OOS trades is an error; a rolling window with unreadable OOS is skipped. The UI shows ⚠. | A failed run can't win Min Drawdown or beat losing runs (`tests/selection.test.ts`). |
+| E003 | `10dd799` | **C3:** date inputs are verified (format-tolerant) before Apply in both the debugger and DOM paths. Walk-forward aborts when the IS or OOS range can't be set. | `tests/dates.test.ts`. |
+| E004 | `d7e74db` | **H2:** drawdown includes each trade's adverse excursion; the true max % is tracked separately. | Trade down $40k but closed +$1k now gives 40% DD (was 0%); early −20% dip now gives 20% (was 16.7%). One existing fixture expectation moved from 0.09% to 0.094% (documented). |
+
+**Design choice in E002:** abort only on the first 3 failed reads, not on any 3 in a row.
+Parameter sets with no trades may not offer an export in TradingView (unverified). Aborting
+mid-sweep would turn a legitimate empty region into a failed optimization.
+
+**Limitations**
+- Not run in a browser: the DOM and debugger behaviour of E002 and E003 is unverified.
+- Max drawdown is still a lower bound (intra-trade run-ups before the adverse excursion aren't
+  exported).
+- History saved before the fixes isn't recomputed.
+
+**Decision:** keep all four. **Next:** browser verification (memory §14, step 0), then H1 (Sharpe
+definition) and H3 (configurable prop-firm rules with Lucid presets).

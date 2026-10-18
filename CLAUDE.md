@@ -16,19 +16,24 @@
   effects at load and can't be imported in tests.
 
 ## Commands
-`bun install --frozen-lockfile`, `bun run typecheck`, `bun run test` (9 tests),
-`bun test research/audit` (audit evidence), `bun run build`. `bun run lint` is broken (no ESLint
+`bun install --frozen-lockfile`, `bun run typecheck`, `bun run test` (22 tests),
+`bun test research/audit` (evidence for open issues), `bun run build`. `bun run lint` is broken (no ESLint
 config or dependency).
 
-## Known critical issues (details and evidence in the memory file, section 11)
-- **C1:** single walk-forward picks the best run with `0.4·IS + 0.6·OOS` (OOS leak).
-- **C2:** failed CSV extraction becomes a valid zero-metric run.
-- **C3:** a date-range failure doesn't stop walk-forward.
-- **H1:** Sharpe scales with √(trade count).
-- **H2:** drawdown is closed-trade only.
-- **H3:** the prop-firm check is a fixed FTMO preset.
+## Audit status (details in the memory file, section 11)
+- **Fixed on `audit-fixes`, with tests:**
+  - C1: walk-forward OOS leak
+  - C2: failed or zero-trade runs being ranked
+  - C3: unverified walk-forward dates
+  - H2: drawdown understatement
+- **Still open:**
+  - H1: Sharpe scales with √(trade count)
+  - H3: the prop-firm check is a fixed FTMO preset
+  - H4: heuristic backtest-completion detection
+  - mediums and lows
 
-Treat optimizer outputs as **untrusted** until these are fixed.
+None of the fixes has been verified in a live TradingView session yet. Until then, treat Sharpe
+rankings and the prop-firm verdict as untrusted.
 
 ## Working rules (from the user)
 - Understand before modifying; verify claims against code. Never fabricate results, metrics or

@@ -166,6 +166,12 @@ chart. This is not possible in a headless CI container.**
 - No API keys or environment variables.
 
 ## 10. Tests
+Since the fixes:
+- `bun run test` runs 22 tests in 4 files: `tests/selection.test.ts` (C1/C2), `tests/dates.test.ts`
+  (C3), and `tests/trades.test.ts` (with H2).
+- `bun test research/audit` runs 6 characterisations of still-open issues (A1, A4, A5, A6, A7, A8).
+
+Original state at `cc6d187`:
 - **`tests/`:** CSV header compatibility (Sept 2026 export, legacy "Net P&L %"); Sharpe > 0;
   capital inference; UTM links.
 - **`research/audit/metrics-audit.test.ts`:** characterisation tests A1–A9 that reproduce the
@@ -175,6 +181,13 @@ chart. This is not possible in a headless CI container.**
   side effects at load).
 
 ## 11. Audit: issues that can distort reported performance (prioritised)
+**Status (branch `audit-fixes`):**
+- **FIXED:** C1 (`2e815ec`), C2 (`e7902d8`), C3 (`10dd799`), H2 (`d7e74db`). Each has regression tests
+  in `tests/`. None has been exercised against live TradingView yet (see §12).
+- **OPEN:** H1, H3, H4, M1–M6, L1–L8.
+
+The descriptions below are the original findings; line numbers refer to `cc6d187`.
+
 Evidence: "A#" = reproducing test in `research/audit/metrics-audit.test.ts`; "code" = file and line
 reference.
 
@@ -275,6 +288,24 @@ reference.
 **None.** Producing one requires a live TradingView session. The reproducible procedure is in
 `research/BASELINES.md`. No number in this repo should be read as a strategy baseline.
 
+## 12b. Behaviour changes introduced by the fixes (user-visible)
+- **Single walk-forward:** "Best Parameters" are now the best In-Sample run. Results are usually
+  less flattering out of sample, and that's the point.
+- **Runs whose trade list can't be read:**
+  - flagged with ⚠ in the results table
+  - excluded from best and heatmap
+  - if the first 3 reads all fail, the optimization aborts with an error
+- **Zero-trade runs** can no longer be "best".
+- **Walk-forward date range:** aborts with an error when it can't be set and verified (previously
+  ran on whatever dates were loaded).
+- **Max drawdown** values increase: open-trade losses now count, and the % is the true maximum.
+  Saved history from before the change isn't recomputed.
+
+New modules:
+- `src/selection.ts`: `goalValue`, `isEligible`, `isBetterRun`, `selectBestByInSample`; shared by
+  the content script and the UI.
+- `src/dates.ts`: `dateInputMatches`, `dateRangeMatches`.
+
 ## 13. Design decisions worth keeping
 - Metrics come from the exported trade list, not by scraping summary cards, so every run is scored
   identically.
@@ -283,13 +314,12 @@ reference.
 - Tab "wake-up" switching works around background-tab throttling.
 
 ## 14. Roadmap (do in order; one isolated change per experiment, each with a regression test)
-1. **C1:** select the single walk-forward best on IS only; report the OOS of that pre-selected run.
-   Show the other runs' OOS only as a labelled diagnostic.
-2. **C2:** treat an extraction failure or timeout as an invalid run. Exclude it from best-run
-   selection, show a count, and abort after N consecutive failures.
-3. **C3:** verify the applied date range (button text or inputs) before each phase; abort on
-   mismatch. Make the background verify `actualStart/End`.
-4. **H2:** max drawdown using the per-trade adverse excursion and true max-% drawdown.
+Items 1–4 (C1, C2, C3, H2) are done on `audit-fixes`.
+
+0. **Verify the fixes in a live browser:**
+   - run the `research/BASELINES.md` procedure
+   - force an extraction failure (hide the List of Trades tab) and check for the ⚠ / abort
+   - force a bad date range and check for the abort
 5. **H1:** time-based Sharpe/Sortino (daily P&L from exit dates, annualised by √252), or rename to
    "per-trade Sharpe" without N-scaling.
 6. **H3:** configurable prop-firm rules, including end-of-day trailing max loss and daily-P&L
