@@ -72,3 +72,34 @@ mid-sweep would turn a legitimate empty region into a failed optimization.
 
 **Decision:** keep all four. **Next:** browser verification (memory §14, step 0), then H1 (Sharpe
 definition) and H3 (configurable prop-firm rules with Lucid presets).
+
+---
+
+## 2026-10-18 · E005–E007 · H1, H3 and a browser probe (branch `audit-fixes`)
+
+Offline verification after these commits:
+
+| | |
+|---|---|
+| typecheck | pass |
+| `bun run test` | 44/44 |
+| `bun test research/audit` | 4/4 |
+| build | pass |
+
+| ID | Commit | Change | Evidence |
+|---|---|---|---|
+| E005 | `5f3e85c` | **H1 + L1:** Sharpe/Sortino annualised by √(trades per year) over the first-entry to last-exit span, not √min(252, N). Sortino uses the standard downside deviation. | Same pattern over a 4× longer backtest: Sharpe ratio 1.0 ± 5% (was 2.0×). Quarter frequency gives half the Sharpe. Exact-formula and undated fallback tests (`tests/ratios.test.ts`). |
+| E006 | `ec2e7b3` | **H3:** `src/propfirm.ts` replays trades through sequential evaluation attempts. 10 Lucid presets (Flex, Pro with and without DLL, Daily intraday+DLL and EOD, 25K/50K) plus the original percentages as a generic static preset; selectable in the UI. | 16 unit tests covering EOD versus intraday trailing, lock at +$100, consistency hold-back, soft versus hard daily limit, static limit, restart after a breach, size and verdict. Differential test against the Python `lucid_eval`: 600 random cases, 0 mismatches. |
+| E007 | none | Headless Chromium probe on tradingview.com with the built extension, no account. | Chart loads; service worker and content script run; Optimizer button injected. **Blocked:** TradingView requires an account to add any strategy. No account created, no credentials used. |
+
+**Limitations**
+- The prop-firm UI rendering was checked by typecheck and build only, not seen in a browser.
+- Session grouping assumes the chart time zone is ET or CT, with rollover at 17:00 chart time.
+- Trades are assumed not to overlap.
+- Funded-stage rules (payouts, scaling, the 40% Pro payout consistency) are not modelled.
+
+**Decision:** keep both changes.
+
+**Next:**
+- the user runs the `BASELINES.md` procedure in their logged-in browser (step 0)
+- then H4 (positive completion check)

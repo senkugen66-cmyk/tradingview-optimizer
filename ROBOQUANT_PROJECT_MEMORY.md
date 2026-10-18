@@ -141,9 +141,12 @@ The "Commission" CSV column is not parsed.
 | Initial capital | inferred from the cumulative USD/% columns (`inferInitialCapital`), fallback 100,000 |
 | Win rate | winners ÷ all trades (breakeven trades are in the denominator) |
 | Profit factor | gross profit ÷ gross loss, capped at 999 |
-| Max drawdown | **closed-trade equity only**; the % is taken at the point of the largest **dollar** drawdown |
-| Sharpe | mean(per-trade %) ÷ std(per-trade %) × **√min(252, N trades)**; no risk-free rate |
-| Sortino | mean ÷ sqrt(Σ negative r² ÷ (n_neg − 1)) × √min(252, N) |
+| Max drawdown | equity path including each trade's adverse excursion; max $ and max % tracked separately (H2 fix). Still a lower bound. |
+| Sharpe | mean(per-trade %) ÷ std(per-trade %) × **√(trades per year)**, trades per year = N ÷ years from first entry to last exit (H1 fix). Factor 1 when the dates can't be read or the span is under a day. No risk-free rate. |
+| Sortino | mean ÷ √(mean of min(r, 0)² over all N trades) × the same factor (L1 fix) |
+
+Before the fixes (`cc6d187`): drawdown was closed-trade only with the % taken at the largest-$ point;
+Sharpe and Sortino used √min(252, N); Sortino used only losing trades ÷ (n_neg − 1).
 
 ## 8. Setup and commands (verified 2026-10-18; Bun 1.4.2, Node 22)
 ```
@@ -167,9 +170,13 @@ chart. This is not possible in a headless CI container.**
 
 ## 10. Tests
 Since the fixes:
-- `bun run test` runs 22 tests in 4 files: `tests/selection.test.ts` (C1/C2), `tests/dates.test.ts`
-  (C3), and `tests/trades.test.ts` (with H2).
-- `bun test research/audit` runs 6 characterisations of still-open issues (A1, A4, A5, A6, A7, A8).
+- `bun run test` runs 44 tests in 6 files: `tests/selection.test.ts` (C1/C2), `tests/dates.test.ts`
+  (C3), `tests/trades.test.ts` (with H2), `tests/ratios.test.ts` (H1/L1) and
+  `tests/propfirm.test.ts` (H3).
+- `bun test research/audit` runs 4 characterisations of still-open issues (A5, A6, A7, A8).
+- `src/propfirm.ts` was also cross-checked against the independently tested Python Lucid evaluator
+  (`lucid_eval` in the user's trade-backtest repo, `futures/intraday_backtest.py`): 600 random
+  cases, 0 mismatches in passes, breaches and unresolved attempts.
 
 Original state at `cc6d187`:
 - **`tests/`:** CSV header compatibility (Sept 2026 export, legacy "Net P&L %"); Sharpe > 0;
@@ -182,9 +189,10 @@ Original state at `cc6d187`:
 
 ## 11. Audit: issues that can distort reported performance (prioritised)
 **Status (branch `audit-fixes`):**
-- **FIXED:** C1 (`2e815ec`), C2 (`e7902d8`), C3 (`10dd799`), H2 (`d7e74db`). Each has regression tests
-  in `tests/`. None has been exercised against live TradingView yet (see §12).
-- **OPEN:** H1, H3, H4, M1–M6, L1–L8.
+- **FIXED:** C1 (`2e815ec`), C2 (`e7902d8`), C3 (`10dd799`), H2 (`d7e74db`), H1 + L1 (`5f3e85c`),
+  H3 (`ec2e7b3`). Each has regression tests in `tests/`. None has been exercised in a logged-in
+  TradingView session yet (see §12).
+- **OPEN:** H4, M1–M6, L2–L8.
 
 The descriptions below are the original findings; line numbers refer to `cc6d187`.
 
@@ -285,8 +293,16 @@ reference.
 - CSV header normalisation tolerates renames (trades.ts 18–54).
 
 ## 12. Performance baselines
-**None.** Producing one requires a live TradingView session. The reproducible procedure is in
-`research/BASELINES.md`. No number in this repo should be read as a strategy baseline.
+**None.** Producing one requires a **logged-in** TradingView session. The reproducible procedure is
+in `research/BASELINES.md`. No number in this repo should be read as a strategy baseline.
+
+Browser probe (2026-10-18, headless Chromium with the built `dist/`, no TradingView account):
+- the `MNQ1!` chart loads; the extension's service worker starts and the content script injects its
+  "Optimizer" button into the bottom-panel tab bar
+- **blocked:** adding any strategy, built-in included, shows "You'll need a free account to access".
+  No account was created and no credentials were used, so no optimization run could be exercised.
+- the content script's global error handler logs TradingView's own benign
+  "ResizeObserver loop completed" errors as `UNCAUGHT ERROR`. That's noise, not an extension fault.
 
 ## 12b. Behaviour changes introduced by the fixes (user-visible)
 - **Single walk-forward:** "Best Parameters" are now the best In-Sample run. Results are usually
@@ -300,11 +316,36 @@ reference.
   ran on whatever dates were loaded).
 - **Max drawdown** values increase: open-trade losses now count, and the % is the true maximum.
   Saved history from before the change isn't recomputed.
+- **Sharpe / Sortino** change scale: annualised by trades per year instead of √min(252, N). A
+  strategy that trades rarely over a long backtest no longer gets a bonus from its length; a
+  high-frequency one still scores higher when its per-trade edge holds (that is real annualisation).
+  Values from saved history aren't recomputed, so don't compare them with new runs.
+- **Prop Firm Challenge** section:
+  - has a rule selector, defaulting to LucidFlex 25K
+  - replays the best run's trades (out-of-sample when available) through sequential evaluation
+    attempts
+  - shows attempts passed and breached, the first attempt, the median time to pass, the worst
+    session, daily-limit hits, consistency hold-backs and position size
+  - the old 8/5/10 % check is still available as "Generic static challenge", now using session P&L
+    instead of the largest single trade
+  - the verdict is COMPATIBLE (≥ 1 pass, 0 breaches, size OK), MARGINAL (more passes than breaches)
+    or AT RISK
 
 New modules:
 - `src/selection.ts`: `goalValue`, `isEligible`, `isBetterRun`, `selectBestByInSample`; shared by
   the content script and the UI.
-- `src/dates.ts`: `dateInputMatches`, `dateRangeMatches`.
+- `src/dates.ts`: `dateInputMatches`, `dateRangeMatches`, `parseTradeTimestamp`.
+- `src/propfirm.ts`:
+  - `LUCID_PRESETS`, `genericPercentRules`, `resolveRules`
+  - `evaluatePropFirm`, `propFirmVerdict`
+  - `sessionKey` (exit at or after 17:00 chart time goes to the next session), `contractKind`
+
+  Assumptions:
+  - trades are sequential
+  - worst open equity = entry equity − adverse excursion
+  - intraday-trailing rules assume the run-up comes before the dip (the conservative order)
+  - a soft daily loss limit liquidates at the limit and skips the session's remaining trades
+  - Lucid's consistency "cushion" is ignored (conservative)
 
 ## 13. Design decisions worth keeping
 - Metrics come from the exported trade list, not by scraping summary cards, so every run is scored
@@ -314,19 +355,20 @@ New modules:
 - Tab "wake-up" switching works around background-tab throttling.
 
 ## 14. Roadmap (do in order; one isolated change per experiment, each with a regression test)
-Items 1–4 (C1, C2, C3, H2) are done on `audit-fixes`.
+Items 1–6 (C1, C2, C3, H2, H1, H3) are done on `audit-fixes`.
 
-0. **Verify the fixes in a live browser:**
+0. **Verify the fixes in a live browser (needs the user's logged-in TradingView; see §12 probe):**
    - run the `research/BASELINES.md` procedure
+   - in the Prop Firm section, switch presets and check the numbers against a hand count on the
+     exported trade CSV
    - force an extraction failure (hide the List of Trades tab) and check for the ⚠ / abort
    - force a bad date range and check for the abort
-5. **H1:** time-based Sharpe/Sortino (daily P&L from exit dates, annualised by √252), or rename to
-   "per-trade Sharpe" without N-scaling.
-6. **H3:** configurable prop-firm rules, including end-of-day trailing max loss and daily-P&L
-   aggregation (Lucid presets).
+5. ~~H1~~ done (trades-per-year annualisation; a daily-P&L Sharpe is a possible later refinement).
+6. ~~H3~~ done (Lucid presets; funded-stage rules such as payouts, scaling and the 40% Pro payout
+   consistency are not modelled, since this is an evaluation check).
 7. **H4:** positive completion check (fingerprint the exported CSV against the previous run plus a
    retry) and record a "possibly stale" flag.
 8. Make `trades.ts`-style pure modules for selection, combinations and overfitting so they're
-   testable. Fix M4/M5/L1/L2/L3.
+   testable. Fix M4/M5/L2/L3.
 9. Only then: optimizer improvements (random or Bayesian search, neighbourhood-robust selection,
    walk-forward with an untouched final test period).

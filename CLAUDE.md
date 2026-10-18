@@ -16,7 +16,7 @@
   effects at load and can't be imported in tests.
 
 ## Commands
-`bun install --frozen-lockfile`, `bun run typecheck`, `bun run test` (22 tests),
+`bun install --frozen-lockfile`, `bun run typecheck`, `bun run test` (44 tests),
 `bun test research/audit` (evidence for open issues), `bun run build`. `bun run lint` is broken (no ESLint
 config or dependency).
 
@@ -26,14 +26,15 @@ config or dependency).
   - C2: failed or zero-trade runs being ranked
   - C3: unverified walk-forward dates
   - H2: drawdown understatement
+  - H1 + L1: Sharpe/Sortino annualised by trades per year; standard Sortino
+  - H3: prop-firm check replays trades through Lucid presets (`src/propfirm.ts`)
 - **Still open:**
-  - H1: Sharpe scales with √(trade count)
-  - H3: the prop-firm check is a fixed FTMO preset
   - H4: heuristic backtest-completion detection
   - mediums and lows
 
-None of the fixes has been verified in a live TradingView session yet. Until then, treat Sharpe
-rankings and the prop-firm verdict as untrusted.
+None of the fixes has been verified in a logged-in TradingView session yet. A headless probe
+without an account got as far as the extension injecting; adding a strategy needs an account.
+Until the browser check is done, treat all optimizer output as provisional.
 
 ## Working rules (from the user)
 - Understand before modifying; verify claims against code. Never fabricate results, metrics or
