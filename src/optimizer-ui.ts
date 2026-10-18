@@ -25,7 +25,7 @@ import type {
 } from './types';
 
 import { roboquantLink } from './config';
-import { isBetterRun } from './selection';
+import { isBetterRun, isEligible } from './selection';
 
 // Import Plotly for 3D heatmap - using the minified distribution
 import Plotly from 'plotly.js-dist-min';
@@ -3206,7 +3206,7 @@ function renderResultsView(): string {
 
                   return `
                   <tr class="${run === best ? 'best' : ''}" data-run-number="${run.runNumber}">
-                    <td>${run.runNumber}</td>
+                    <td${run.invalidReason || run.outOfSampleInvalidReason ? ` title="${escapeAttr(run.invalidReason || run.outOfSampleInvalidReason || '')}"` : ''}>${run.runNumber}${run.invalidReason || run.outOfSampleInvalidReason ? ' ⚠' : ''}</td>
                     ${isMultiMode && hasMultiSymbol ? `<td style="font-family: 'JetBrains Mono', monospace; font-size: 11px;">${run.symbol || '-'}</td>` : ''}
                     ${isMultiMode && hasMultiTimeframe ? `<td>${run.timeframe ? getTimeframeLabel(run.timeframe) : '-'}</td>` : ''}
                     ${paramNames.map(k => `<td>${run.parameters[k]}</td>`).join('')}
@@ -3788,7 +3788,7 @@ export function addRun(run: OptimizationRun): void {
   // Update best if needed
   if (state.progress) {
     const currentBest = state.progress.bestSoFar;
-    if (!currentBest || isBetterRun(run, currentBest, state.optimizationGoal)) {
+    if (isEligible(run) && (!currentBest || isBetterRun(run, currentBest, state.optimizationGoal))) {
       state.progress.bestSoFar = run;
     }
   }
@@ -4281,6 +4281,7 @@ function getHeatmapData(): { data: HeatmapDataPoint[]; xValues: number[]; yValue
   const ySet = new Set<number>();
 
   for (const run of state.result.runs) {
+    if (run.invalidReason) continue;   // failed extraction: metrics are placeholders, not results
     const xRaw = run.parameters[xParam];
     const yRaw = run.parameters[yParam];
     // Heatmap only works with numeric params — skip non-numeric

@@ -280,6 +280,10 @@ export interface OptimizationRun {
   outOfSampleTrades?: BacktestTrade[];
   /** Rolling walk-forward: window number this run belongs to */
   windowNumber?: number;
+  /** Set when the run's (In-Sample) trade list could not be read; the run is never eligible as best */
+  invalidReason?: string;
+  /** Set when the Out-of-Sample trade list could not be read */
+  outOfSampleInvalidReason?: string;
 }
 
 /** Simplified metrics for optimization (subset of full backtest) */

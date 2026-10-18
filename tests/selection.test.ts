@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { goalValue, isBetterRun, selectBestByInSample } from '../src/selection';
+import { goalValue, isBetterRun, isEligible, selectBestByInSample } from '../src/selection';
 import type { OptimizationMetrics, OptimizationRun } from '../src/types';
 
 function metrics(over: Partial<OptimizationMetrics>): OptimizationMetrics {
@@ -51,5 +51,27 @@ describe('selectBestByInSample (regression for audit C1)', () => {
       sum += selectBestByInSample(runs, 'netProfitPercent')!.outOfSampleMetrics!.netProfitPercent;
     }
     expect(Math.abs(sum / trials)).toBeLessThan(0.1);   // was ~ +1.8 with the old rule (audit A9)
+  });
+});
+
+describe('eligibility (regression for audit C2)', () => {
+  test('a failed extraction never beats a real run, even on Min Drawdown', () => {
+    const failed = { ...run(1, { totalTrades: 0 }), invalidReason: 'Trade list could not be read from TradingView' };
+    const real = run(2, { maxDrawdownPercent: 12, netProfitPercent: -3 });
+    expect(isBetterRun(failed, real, 'maxDrawdownPercent')).toBe(false);
+    expect(isBetterRun(real, failed, 'maxDrawdownPercent')).toBe(true);
+    expect(isBetterRun(failed, real, 'netProfitPercent')).toBe(false);   // even when the real run lost money
+  });
+
+  test('a run with zero trades is not eligible as best', () => {
+    const idle = run(1, { totalTrades: 0 });
+    const real = run(2, { maxDrawdownPercent: 4 });
+    expect(isEligible(idle)).toBe(false);
+    expect(selectBestByInSample([idle, real], 'maxDrawdownPercent')?.runNumber).toBe(2);
+  });
+
+  test('no eligible run gives no best run', () => {
+    const failed = { ...run(1, {}), invalidReason: 'x' };
+    expect(selectBestByInSample([failed], 'sharpeRatio')).toBeNull();
   });
 });

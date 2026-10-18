@@ -64,6 +64,8 @@ describe('A4 Sortino downside deviation uses only losing trades, divided by (los
   });
 });
 
+// A5 still describes trades.ts. Since the C2 fix, such runs are flagged invalidReason and are never
+// eligible as best (regression tests in tests/selection.test.ts).
 describe('A5 A failed extraction (no trades) yields all-zero metrics', () => {
   test('zero drawdown and zero profit, indistinguishable from a real flat run', () => {
     const m = calculateMetricsFromTrades([], CAPITAL);

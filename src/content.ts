@@ -38,7 +38,7 @@ import type {
   ChangeTimeframeResponse,
 } from './types';
 import { parseCSVTrades, calculateMetricsFromTrades } from './trades';
-import { isBetterRun, selectBestByInSample } from './selection';
+import { isBetterRun, isEligible, selectBestByInSample } from './selection';
 import selectors from './selectors.json';
 import { injectOptimizerButton, updateProgress, addRun, setResult } from './optimizer-ui';
 
@@ -496,6 +496,27 @@ async function extractTradesViaCSV(): Promise<CSVExtractionResult> {
   });
 }
 
+/**
+ * Read the current run's trade list. `failed` is true when the export could not be
+ * captured (exception or timeout). A successful export always contains the header
+ * row, so an empty raw CSV means nothing was captured, not "zero trades".
+ */
+async function readRunTrades(label: string): Promise<{ trades: BacktestTrade[]; failed: boolean }> {
+  try {
+    const csvResult = await extractTradesViaCSV();
+    if (!csvResult.rawCsvContent) {
+      console.error(`[RQ Extension] ${label}: trade list export was not captured (timeout)`);
+      return { trades: [], failed: true };
+    }
+    return { trades: csvResult.trades, failed: false };
+  } catch (err) {
+    console.error(`[RQ Extension] ${label}: failed to extract trades:`, err);
+    return { trades: [], failed: true };
+  }
+}
+
+const EXTRACTION_FAILED = 'Trade list could not be read from TradingView';
+const MIN_READS_BEFORE_ABORT = 3;
 
 // ============================================================================
 // Strategy Metadata Extraction
@@ -2264,6 +2285,22 @@ async function handleStartOptimization(
     lastRunCompleteTime = Date.now();
   };
 
+  // Failed reads are flagged per run and excluded from best-run selection. Abort only when the
+  // very first runs all fail (export broken); later failures can be legitimate (e.g. parameter
+  // sets with no trades may not offer an export) and must not stop the sweep.
+  let extractionAttempts = 0;
+  let extractionFailures = 0;
+  const noteExtraction = (failed: boolean) => {
+    extractionAttempts++;
+    if (failed) extractionFailures++;
+    if (extractionAttempts === MIN_READS_BEFORE_ABORT && extractionFailures === extractionAttempts) {
+      throw new Error(
+        `${EXTRACTION_FAILED} for the first ${MIN_READS_BEFORE_ABORT} runs. ` +
+        'Make sure the Strategy Tester "List of Trades" tab is visible, then retry.'
+      );
+    }
+  };
+
   // Open the settings dialog and keep it open during optimization
   const settingsDialog = await openSettingsDialogForOptimization(strategyName);
   if (!settingsDialog) {
@@ -2369,13 +2406,9 @@ async function handleStartOptimization(
             await sleep(config.delayBetweenRuns);
 
             // Extract IS trades
-            let isTrades: BacktestTrade[] = [];
-            try {
-              const csvResult = await extractTradesViaCSV();
-              isTrades = csvResult.trades;
-            } catch (err) {
-              console.warn(`[RQ Extension] Failed to extract IS trades W${currentWindowNumber} run ${runNumber}:`, err);
-            }
+            const isRead = await readRunTrades(`W${currentWindowNumber} IS run ${runNumber}`);
+            noteExtraction(isRead.failed);
+            const isTrades = isRead.trades;
 
             const isMetrics = calculateMetricsFromTrades(isTrades);
 
@@ -2389,13 +2422,14 @@ async function handleStartOptimization(
               timestamp: new Date().toISOString(),
               duration: Date.now() - runStart,
               windowNumber: currentWindowNumber,
+              invalidReason: isRead.failed ? EXTRACTION_FAILED : undefined,
             };
 
             windowRuns.push(run);
             runs.push(run);
             addRun(run);
 
-            if (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal)) {
+            if (isEligible(run) && (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal))) {
               bestRun = run;
             }
 
@@ -2447,12 +2481,10 @@ async function handleStartOptimization(
               await waitForBacktestUpdate();
               await sleep(config.delayBetweenRuns);
 
-              try {
-                const csvResult = await extractTradesViaCSV();
-                run.outOfSampleTrades = csvResult.trades;
-              } catch (err) {
-                console.warn(`[RQ Extension] Failed to extract OOS trades W${currentWindowNumber} run ${i + 1}:`, err);
-              }
+              const oosRead = await readRunTrades(`W${currentWindowNumber} OOS run ${i + 1}`);
+              noteExtraction(oosRead.failed);
+              run.outOfSampleTrades = oosRead.trades;
+              if (oosRead.failed) run.outOfSampleInvalidReason = EXTRACTION_FAILED;
 
               const oosMetrics = calculateMetricsFromTrades(run.outOfSampleTrades || []);
               run.outOfSampleMetrics = oosMetrics;
@@ -2460,15 +2492,14 @@ async function handleStartOptimization(
               markRunComplete();
             }
 
-            // Find best run for this window and calculate window result
-            let bestWindowRun = windowRuns[0];
-            for (const run of windowRuns) {
-              if (run.outOfSampleMetrics && isBetterRun(run, bestWindowRun, config.optimizationGoal)) {
-                bestWindowRun = run;
-              }
+            // Best run for this window: In-Sample metrics only, eligible runs only
+            const bestWindowRun = selectBestByInSample(windowRuns, config.optimizationGoal);
+            if (bestWindowRun?.outOfSampleInvalidReason) {
+              console.error(`[RQ Extension] Window ${currentWindowNumber} skipped: OOS trades of the selected run could not be read`);
             }
 
-            if (bestWindowRun && bestWindowRun.inSampleMetrics && bestWindowRun.outOfSampleMetrics) {
+            if (bestWindowRun && !bestWindowRun.outOfSampleInvalidReason &&
+                bestWindowRun.inSampleMetrics && bestWindowRun.outOfSampleMetrics) {
               const isProfit = bestWindowRun.inSampleMetrics.netProfitPercent;
               const oosProfit = bestWindowRun.outOfSampleMetrics.netProfitPercent;
               const overfitScore = calculateOverfittingScore(bestWindowRun.inSampleMetrics, bestWindowRun.outOfSampleMetrics);
@@ -2573,15 +2604,10 @@ async function handleStartOptimization(
           await sleep(config.delayBetweenRuns);
 
         // Extract full trade data for this run via CSV
-        let isTrades: BacktestTrade[] = [];
-        try {
-          console.log(`[RQ Extension] Extracting trades via CSV for IS run ${runNumber}...`);
-          const csvResult = await extractTradesViaCSV();
-          isTrades = csvResult.trades;
-          console.log(`[RQ Extension] IS run ${runNumber}: extracted ${isTrades.length} trades`);
-        } catch (err) {
-          console.warn('[RQ Extension] Failed to extract trades for IS run:', err);
-        }
+        const isRead = await readRunTrades(`IS run ${runNumber}`);
+        noteExtraction(isRead.failed);
+        const isTrades = isRead.trades;
+        console.log(`[RQ Extension] IS run ${runNumber}: extracted ${isTrades.length} trades`);
 
         // Calculate metrics from trades (not from TV UI)
         const isMetrics = calculateMetricsFromTrades(isTrades);
@@ -2601,13 +2627,14 @@ async function handleStartOptimization(
           inSampleTrades: isTrades,
           timestamp: new Date().toISOString(),
           duration: Date.now() - runStart,
+          invalidReason: isRead.failed ? EXTRACTION_FAILED : undefined,
         };
 
         runs.push(run);
         addRun(run);
 
         // Update best run based on IS metrics
-        if (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal)) {
+        if (isEligible(run) && (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal))) {
           bestRun = run;
         }
 
@@ -2672,14 +2699,11 @@ async function handleStartOptimization(
           await sleep(config.delayBetweenRuns);
 
           // Extract full trade data for OOS via CSV
-          try {
-            console.log(`[RQ Extension] Extracting trades via CSV for OOS run ${i + 1}...`);
-            const csvResult = await extractTradesViaCSV();
-            run.outOfSampleTrades = csvResult.trades;
-            console.log(`[RQ Extension] OOS run ${i + 1}: extracted ${run.outOfSampleTrades.length} trades`);
-          } catch (err) {
-            console.warn('[RQ Extension] Failed to extract trades for OOS run:', err);
-          }
+          const oosRead = await readRunTrades(`OOS run ${i + 1}`);
+          noteExtraction(oosRead.failed);
+          run.outOfSampleTrades = oosRead.trades;
+          if (oosRead.failed) run.outOfSampleInvalidReason = EXTRACTION_FAILED;
+          console.log(`[RQ Extension] OOS run ${i + 1}: extracted ${run.outOfSampleTrades.length} trades`);
 
           // Calculate OOS metrics from trades (not from TV UI)
           const oosMetrics = calculateMetricsFromTrades(run.outOfSampleTrades || []);
@@ -2706,6 +2730,10 @@ async function handleStartOptimization(
         if (isBest) {
           bestRun = isBest;
           console.log('[RQ Extension] Best In-Sample run:', bestRun.runNumber, bestRun.parameters);
+        }
+
+        if (bestRun?.outOfSampleInvalidReason) {
+          throw new Error('Out-of-Sample trades for the selected parameters could not be read; the walk-forward result is incomplete.');
         }
 
         // Calculate final overfitting score for the best run
@@ -2816,15 +2844,10 @@ async function handleStartOptimization(
             await sleep(config.delayBetweenRuns);
 
             // Extract full trade data for this run via CSV
-            let trades: BacktestTrade[] = [];
-            try {
-              console.log(`[RQ Extension] Extracting trades via CSV for run ${runNumber}...`);
-              const csvResult = await extractTradesViaCSV();
-              trades = csvResult.trades;
-              console.log(`[RQ Extension] Run ${runNumber}: extracted ${trades.length} trades`);
-            } catch (err) {
-              console.warn('[RQ Extension] Failed to extract trades for run:', err);
-            }
+            const read = await readRunTrades(`Run ${runNumber}`);
+            noteExtraction(read.failed);
+            const trades = read.trades;
+            console.log(`[RQ Extension] Run ${runNumber}: extracted ${trades.length} trades`);
 
             // Calculate metrics from trades (not from TV UI)
             const metrics = calculateMetricsFromTrades(trades);
@@ -2844,26 +2867,27 @@ async function handleStartOptimization(
               duration: Date.now() - runStart,
               symbol: symbol || undefined,
               timeframe: timeframe || undefined,
+              invalidReason: read.failed ? EXTRACTION_FAILED : undefined,
             };
 
             runs.push(run);
             addRun(run);
 
             // Update best run
-            if (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal)) {
+            if (isEligible(run) && (!bestRun || isBetterRun(run, bestRun, config.optimizationGoal))) {
               bestRun = run;
             }
 
             // Track best by symbol
             if (symbol) {
-              if (!bestBySymbol[symbol] || isBetterRun(run, bestBySymbol[symbol], config.optimizationGoal)) {
+              if (isEligible(run) && (!bestBySymbol[symbol] || isBetterRun(run, bestBySymbol[symbol], config.optimizationGoal))) {
                 bestBySymbol[symbol] = run;
               }
             }
 
             // Track best by timeframe
             if (timeframe) {
-              if (!bestByTimeframe[timeframe] || isBetterRun(run, bestByTimeframe[timeframe], config.optimizationGoal)) {
+              if (isEligible(run) && (!bestByTimeframe[timeframe] || isBetterRun(run, bestByTimeframe[timeframe], config.optimizationGoal))) {
                 bestByTimeframe[timeframe] = run;
               }
             }
